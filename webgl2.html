@@ -1,0 +1,461 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>WebGL 2 全屏翻滚正方体</title>
+    <style>
+        /* 清除所有内外边距，让画布完全铺满视口 */
+        * {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            /* 防止滚动条出现 */
+        }
+        body {
+            background-color: #1a1a2e;
+            /* 深色背景衬托 */
+        }
+        canvas {
+            display: block;
+            width: 100vw;
+            /* 宽度占满视口 */
+            height: 100vh;
+            /* 高度占满视口 */
+            border: none;
+            border-radius: 0;
+        }
+        /* 底部信息提示 —— 半透明浮层，不影响交互 */
+        .info {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: #aaa;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            background: rgba(0, 0, 0, 0.6);
+            padding: 8px 20px;
+            border-radius: 20px;
+            user-select: none;
+            /* 防止选中文字 */
+            pointer-events: none;
+            /* 让鼠标事件穿透，不影响画布 */
+            letter-spacing: 0.5px;
+            white-space: nowrap;
+        }
+        .info span {
+            color: #ffd700;
+            /* 高亮关键词 */
+        }
+        /* 手机小屏适配，缩小字体和间距 */
+        @media (max-width: 600px) {
+            .info {
+                font-size: 10px;
+                padding: 4px 12px;
+                bottom: 10px;
+            }
+        }
+        /* 如果浏览器不支持 WebGL 2，显示错误遮罩 */
+        .error-overlay {
+            position: fixed;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #1a1a2e;
+            color: #ff6b6b;
+            font-family: 'Segoe UI', sans-serif;
+            font-size: 1.4rem;
+            text-align: center;
+            padding: 2rem;
+            z-index: 999;
+            flex-direction: column;
+            gap: 1rem;
+        }
+        .error-overlay small {
+            color: #aaa;
+            font-size: 1rem;
+        }
+        .error-overlay.hidden {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- 画布元素 -->
+    <canvas id="canvas"></canvas>
+
+    <!-- 底部提示 -->
+    <div class="info">👁 视角 (5, 5, 5) → (0, 0, 0) &nbsp;|&nbsp; <span>透视矩阵</span> &nbsp;|&nbsp; 绕 X·Y·Z 三轴翻滚 &nbsp;|&nbsp; <span>WebGL 2</span></div>
+
+    <!-- 错误遮罩（默认隐藏） -->
+    <div id="errorOverlay" class="error-overlay hidden">
+        <div>⚠️ 您的浏览器不支持 WebGL 2</div>
+        <small>请使用最新版 Chrome / Firefox / Edge 或 Safari 14+</small>
+    </div>
+
+    <script>
+        // ================================================================
+        // 0. 错误处理：检测 WebGL 2 支持
+        // ================================================================
+        const canvas = document.getElementById('canvas');
+        const errorOverlay = document.getElementById('errorOverlay');
+
+        // 尝试获取 WebGL 2 上下文
+        let gl = canvas.getContext('webgl2');
+
+        if (!gl) {
+            // 不支持 WebGL 2 → 显示错误遮罩
+            errorOverlay.classList.remove('hidden');
+            // 但仍然尝试用 WebGL 1 作为降级？不，为了明确升级目标，这里直接终止。
+            throw new Error('WebGL 2 is not supported by this browser.');
+        }
+
+        // 成功获取 WebGL 2 上下文，控制台输出版本信息
+        console.log('✅ WebGL 2 上下文已创建');
+        console.log('   GLSL 版本:', gl.getParameter(gl.SHADING_LANGUAGE_VERSION));
+        console.log('   WebGL 版本:', gl.getParameter(gl.VERSION));
+
+        // ================================================================
+        // 1. 着色器源码 (GLSL 300 es)
+        //    顶点着色器：使用 in / out，attribute → in，varying → out
+        //    片元着色器：使用 in / out，varying → in，gl_FragColor → 自定义 out
+        // ================================================================
+
+        const vsSource = `#version 300 es
+in vec3 aPosition;
+in vec3 aColor;
+uniform mat4 uMVP;
+out vec3 vColor;
+void main() {
+  gl_Position = uMVP * vec4(aPosition, 1.0);
+  vColor = aColor;
+}`;
+
+        const fsSource = `#version 300 es
+precision mediump float;
+in vec3 vColor;
+out vec4 fragColor;
+void main() {
+  fragColor = vec4(vColor, 1.0);
+}`;
+
+        // ================================================================
+        // 2. 编译着色器 (与 WebGL 1 相同，但着色器源码是 GLSL 300 es)
+        // ================================================================
+
+        function compileShader(src, type) {
+            const shader = gl.createShader(type);
+            gl.shaderSource(shader, src);
+            gl.compileShader(shader);
+            if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+                console.error('Shader compile error:', gl.getShaderInfoLog(shader));
+                gl.deleteShader(shader);
+                return null;
+            }
+            return shader;
+        }
+
+        const vs = compileShader(vsSource, gl.VERTEX_SHADER);
+        const fs = compileShader(fsSource, gl.FRAGMENT_SHADER);
+
+        const program = gl.createProgram();
+        gl.attachShader(program, vs);
+        gl.attachShader(program, fs);
+        gl.linkProgram(program);
+        if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+            console.error('Program link error:', gl.getProgramInfoLog(program));
+        }
+
+        // 获取 attribute 和 uniform 位置
+        const aPosition = gl.getAttribLocation(program, 'aPosition');
+        const aColor = gl.getAttribLocation(program, 'aColor');
+        const uMVP = gl.getUniformLocation(program, 'uMVP');
+
+        // ================================================================
+        // 3. 正方体顶点数据 (与 WebGL 1 完全相同)
+        //    6 个面，每面 2 个三角形，共 36 个顶点
+        //    每个顶点 6 个 float: x, y, z, r, g, b
+        // ================================================================
+
+        const faces = [
+            // 前面 (z = +1)  — 红色
+            {
+                pos: [
+                    [-1, -1, 1],
+                    [1, -1, 1],
+                    [1, 1, 1],
+                    [-1, 1, 1]
+                ],
+                color: [1, 0.2, 0.2]
+            },
+            // 后面 (z = -1)  — 蓝色
+            {
+                pos: [
+                    [-1, -1, -1],
+                    [-1, 1, -1],
+                    [1, 1, -1],
+                    [1, -1, -1]
+                ],
+                color: [0.2, 0.3, 1]
+            },
+            // 左面 (x = -1)  — 绿色
+            {
+                pos: [
+                    [-1, -1, -1],
+                    [-1, -1, 1],
+                    [-1, 1, 1],
+                    [-1, 1, -1]
+                ],
+                color: [0.2, 1, 0.3]
+            },
+            // 右面 (x = +1)  — 黄色
+            {
+                pos: [
+                    [1, -1, -1],
+                    [1, 1, -1],
+                    [1, 1, 1],
+                    [1, -1, 1]
+                ],
+                color: [1, 0.9, 0.1]
+            },
+            // 上面 (y = +1)  — 品红
+            {
+                pos: [
+                    [-1, 1, -1],
+                    [-1, 1, 1],
+                    [1, 1, 1],
+                    [1, 1, -1]
+                ],
+                color: [1, 0.2, 0.8]
+            },
+            // 下面 (y = -1)  — 青色
+            {
+                pos: [
+                    [-1, -1, -1],
+                    [1, -1, -1],
+                    [1, -1, 1],
+                    [-1, -1, 1]
+                ],
+                color: [0.1, 0.9, 0.9]
+            }
+        ];
+
+        const vertexData = [];
+        for (const face of faces) {
+            const [v0, v1, v2, v3] = face.pos;
+            const [r, g, b] = face.color;
+            const verts = [v0, v1, v2, v0, v2, v3];
+            for (const v of verts) {
+                vertexData.push(v[0], v[1], v[2], r, g, b);
+            }
+        }
+
+        const vertexArray = new Float32Array(vertexData);
+        const vertexCount = vertexArray.length / 6; // 36
+
+        // 创建 VBO
+        const buffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+        gl.bufferData(gl.ARRAY_BUFFER, vertexArray, gl.STATIC_DRAW);
+
+        // ================================================================
+        // 4. 矩阵运算库 (与 WebGL 1 相同，纯 JS 实现)
+        //    包含：单位矩阵、乘法、透视投影、LookAt、绕三轴旋转
+        // ================================================================
+
+        function mat4Identity() {
+            return new Float32Array([
+                1, 0, 0, 0,
+                0, 1, 0, 0,
+                0, 0, 1, 0,
+                0, 0, 0, 1
+            ]);
+        }
+
+        function mat4Multiply(A, B) {
+            const a = A,
+                b = B;
+            const result = new Float32Array(16);
+            for (let col = 0; col < 4; col++) {
+                for (let row = 0; row < 4; row++) {
+                    let sum = 0;
+                    for (let k = 0; k < 4; k++) {
+                        sum += a[row + k * 4] * b[k + col * 4];
+                    }
+                    result[row + col * 4] = sum;
+                }
+            }
+            return result;
+        }
+
+        function mat4Perspective(fov, aspect, near, far) {
+            const f = 1.0 / Math.tan(fov / 2);
+            const n = near,
+                f_ = far;
+            return new Float32Array([
+                f / aspect, 0, 0, 0,
+                0, f, 0, 0,
+                0, 0, -(f_ + n) / (f_ - n), -1,
+                0, 0, -(2 * f_ * n) / (f_ - n), 0
+            ]);
+        }
+
+        function mat4LookAt(eye, center, up) {
+            const [ex, ey, ez] = eye;
+            const [cx, cy, cz] = center;
+            const [ux, uy, uz] = up;
+
+            let fx = cx - ex,
+                fy = cy - ey,
+                fz = cz - ez;
+            const flen = Math.sqrt(fx * fx + fy * fy + fz * fz);
+            fx /= flen;
+            fy /= flen;
+            fz /= flen;
+
+            let rx = fy * uz - fz * uy;
+            let ry = fz * ux - fx * uz;
+            let rz = fx * uy - fy * ux;
+            const rlen = Math.sqrt(rx * rx + ry * ry + rz * rz);
+            rx /= rlen;
+            ry /= rlen;
+            rz /= rlen;
+
+            let ux_ = ry * fz - rz * fy;
+            let uy_ = rz * fx - rx * fz;
+            let uz_ = rx * fy - ry * fx;
+
+            return new Float32Array([
+                rx, ux_, -fx, 0,
+                ry, uy_, -fy, 0,
+                rz, uz_, -fz, 0,
+                -(rx * ex + ry * ey + rz * ez),
+                -(ux_ * ex + uy_ * ey + uz_ * ez),
+                (fx * ex + fy * ey + fz * ez),
+                1
+            ]);
+        }
+
+        function mat4RotationX(angle) {
+            const c = Math.cos(angle),
+                s = Math.sin(angle);
+            return new Float32Array([
+                1, 0, 0, 0,
+                0, c, s, 0,
+                0, -s, c, 0,
+                0, 0, 0, 1
+            ]);
+        }
+
+        function mat4RotationY(angle) {
+            const c = Math.cos(angle),
+                s = Math.sin(angle);
+            return new Float32Array([
+                c, 0, -s, 0,
+                0, 1, 0, 0,
+                s, 0, c, 0,
+                0, 0, 0, 1
+            ]);
+        }
+
+        function mat4RotationZ(angle) {
+            const c = Math.cos(angle),
+                s = Math.sin(angle);
+            return new Float32Array([
+                c, s, 0, 0,
+                -s, c, 0, 0,
+                0, 0, 1, 0,
+                0, 0, 0, 1
+            ]);
+        }
+
+        // ================================================================
+        // 5. 固定参数
+        // ================================================================
+
+        const fov = Math.PI / 4;
+        const near = 0.1;
+        const far = 100.0;
+        const eye = [5, 5, 5];
+        const center = [0, 0, 0];
+        const up = [0, 1, 0];
+
+        const V = mat4LookAt(eye, center, up);
+
+        // ================================================================
+        // 6. 全屏自适应 (与 WebGL 1 相同)
+        // ================================================================
+
+        function resize() {
+            const width = window.innerWidth;
+            const height = window.innerHeight;
+
+            canvas.width = width;
+            canvas.height = height;
+
+            gl.viewport(0, 0, width, height);
+
+            const aspect = width / height;
+            const P = mat4Perspective(fov, aspect, near, far);
+            window.PV = mat4Multiply(P, V);
+        }
+
+        resize();
+        window.addEventListener('resize', resize);
+
+        // ================================================================
+        // 7. 设置顶点属性 (与 WebGL 1 相同)
+        // ================================================================
+
+        gl.useProgram(program);
+
+        gl.enableVertexAttribArray(aPosition);
+        gl.vertexAttribPointer(aPosition, 3, gl.FLOAT, false, 6 * 4, 0);
+
+        gl.enableVertexAttribArray(aColor);
+        gl.vertexAttribPointer(aColor, 3, gl.FLOAT, false, 6 * 4, 3 * 4);
+
+        gl.enable(gl.DEPTH_TEST);
+        gl.depthFunc(gl.LESS);
+
+        gl.clearColor(0.1, 0.1, 0.18, 1.0);
+
+        // ================================================================
+        // 8. 渲染循环 (与 WebGL 1 相同)
+        // ================================================================
+
+        let angleX = 0,
+            angleY = 0,
+            angleZ = 0;
+
+        function render() {
+            angleX += 0.012;
+            angleY += 0.018;
+            angleZ += 0.009;
+
+            const RY = mat4RotationY(angleY);
+            const RX = mat4RotationX(angleX);
+            const RZ = mat4RotationZ(angleZ);
+            let M = mat4Multiply(RX, RY);
+            M = mat4Multiply(RZ, M);
+
+            const MVP = mat4Multiply(window.PV, M);
+
+            gl.uniformMatrix4fv(uMVP, false, MVP);
+
+            gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+            gl.drawArrays(gl.TRIANGLES, 0, vertexCount);
+
+            requestAnimationFrame(render);
+        }
+
+        render();
+
+        console.log('✅ 正方体全屏翻滚中 (WebGL 2 / GLSL 300 es)');
+    </script>
+</body>
+</html>

@@ -1,0 +1,507 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>WebGL 全屏翻滚正方体</title>
+    <style>
+        /* 清除所有内外边距，让画布完全铺满视口 */
+        * {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;  /* 防止滚动条出现 */
+        }
+        body {
+            background-color: #1a1a2e; /* 深色背景衬托 */
+        }
+        canvas {
+            display: block;
+            width: 100vw;      /* 宽度占满视口 */
+            height: 100vh;     /* 高度占满视口 */
+            border: none;
+            border-radius: 0;
+        }
+        /* 底部信息提示 —— 半透明浮层，不影响交互 */
+        .info {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: #aaa;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            background: rgba(0, 0, 0, 0.6);
+            padding: 8px 20px;
+            border-radius: 20px;
+            user-select: none;    /* 防止选中文字 */
+            pointer-events: none; /* 让鼠标事件穿透，不影响画布 */
+            letter-spacing: 0.5px;
+            white-space: nowrap;
+        }
+        .info span {
+            color: #ffd700; /* 高亮关键词 */
+        }
+        /* 手机小屏适配，缩小字体和间距 */
+        @media (max-width: 600px) {
+            .info {
+                font-size: 10px;
+                padding: 4px 12px;
+                bottom: 10px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- 画布元素，由 JavaScript 控制大小 -->
+    <canvas id="canvas"></canvas>
+    <!-- 底部提示 -->
+    <div class="info">👁 视角 (5, 5, 5) → (0, 0, 0) &nbsp;|&nbsp; <span>透视矩阵</span> &nbsp;|&nbsp; 绕 X·Y·Z 三轴翻滚</div>
+
+    <script>
+        // ================================================================
+        // 1. 获取 Canvas 元素并创建 WebGL 上下文
+        // ================================================================
+        const canvas = document.getElementById('canvas');
+        // 尝试获取 WebGL 1.0 上下文
+        const gl = canvas.getContext('webgl');
+
+        // 如果浏览器不支持 WebGL，给出提示并终止
+        if (!gl) {
+            alert('您的浏览器不支持 WebGL，请使用现代浏览器。');
+            throw new Error('WebGL not supported');
+        }
+
+        // ================================================================
+        // 2. 着色器源码
+        //    顶点着色器：接收顶点位置和颜色，通过 MVP 矩阵变换位置，并将颜色传递到片元着色器
+        //    片元着色器：接收插值后的颜色，直接输出
+        // ================================================================
+
+        const vsSource = `
+            attribute vec3 aPosition;   // 顶点位置 (模型坐标系)
+            attribute vec3 aColor;      // 顶点颜色 (每个面统一颜色)
+            uniform mat4 uMVP;          // 模型-视图-投影 组合矩阵
+            varying vec3 vColor;        // 传递给片元着色器的颜色 (插值)
+
+            void main() {
+                // 将位置向量扩展为齐次坐标 (w=1)，乘以 MVP 矩阵得到裁剪坐标
+                gl_Position = uMVP * vec4(aPosition, 1.0);
+                vColor = aColor;        // 颜色直接传递 (插值由硬件自动完成)
+            }
+        `;
+
+        const fsSource = `
+            precision mediump float;    // 声明浮点数精度
+            varying vec3 vColor;        // 从顶点着色器接收的颜色
+
+            void main() {
+                gl_FragColor = vec4(vColor, 1.0); // 输出颜色，alpha 为 1.0
+            }
+        `;
+
+        // ================================================================
+        // 3. 编译着色器并创建 WebGL 程序
+        // ================================================================
+
+        /**
+         * 编译单个着色器
+         * @param {string} src  着色器源码
+         * @param {number} type 着色器类型 (gl.VERTEX_SHADER 或 gl.FRAGMENT_SHADER)
+         * @returns {WebGLShader} 编译成功的着色器对象，若失败返回 null
+         */
+        function compileShader(src, type) {
+            const shader = gl.createShader(type);     // 创建着色器对象
+            gl.shaderSource(shader, src);             // 设置源码
+            gl.compileShader(shader);                 // 编译
+            // 检查编译状态
+            if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+                console.error('Shader compile error:', gl.getShaderInfoLog(shader));
+                gl.deleteShader(shader);
+                return null;
+            }
+            return shader;
+        }
+
+        // 编译顶点和片元着色器
+        const vs = compileShader(vsSource, gl.VERTEX_SHADER);
+        const fs = compileShader(fsSource, gl.FRAGMENT_SHADER);
+
+        // 创建程序对象，附着着色器并链接
+        const program = gl.createProgram();
+        gl.attachShader(program, vs);
+        gl.attachShader(program, fs);
+        gl.linkProgram(program);
+        if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+            console.error('Program link error:', gl.getProgramInfoLog(program));
+        }
+
+        // 获取着色器中的 attribute 和 uniform 变量位置，后续用于传递数据
+        const aPosition = gl.getAttribLocation(program, 'aPosition');
+        const aColor = gl.getAttribLocation(program, 'aColor');
+        const uMVP = gl.getUniformLocation(program, 'uMVP');
+
+        // ================================================================
+        // 4. 正方体顶点数据
+        //    正方体有 6 个面，每个面由 2 个三角形组成 (共 12 个三角形，36 个顶点)
+        //    每个顶点包含 3 个位置分量和 3 个颜色分量，共 6 个 float
+        //    每个面使用单一颜色，便于区分
+        // ================================================================
+
+        // 定义六个面的顶点 (每个面 4 个顶点，逆时针顺序) 和对应的 RGB 颜色
+        const faces = [
+            // 前面 (z = +1)  — 红色
+            {
+                pos: [
+                    [-1, -1, 1],
+                    [1, -1, 1],
+                    [1, 1, 1],
+                    [-1, 1, 1]
+                ],
+                color: [1, 0.2, 0.2]
+            },
+            // 后面 (z = -1)  — 蓝色
+            {
+                pos: [
+                    [-1, -1, -1],
+                    [-1, 1, -1],
+                    [1, 1, -1],
+                    [1, -1, -1]
+                ],
+                color: [0.2, 0.3, 1]
+            },
+            // 左面 (x = -1)  — 绿色
+            {
+                pos: [
+                    [-1, -1, -1],
+                    [-1, -1, 1],
+                    [-1, 1, 1],
+                    [-1, 1, -1]
+                ],
+                color: [0.2, 1, 0.3]
+            },
+            // 右面 (x = +1)  — 黄色
+            {
+                pos: [
+                    [1, -1, -1],
+                    [1, 1, -1],
+                    [1, 1, 1],
+                    [1, -1, 1]
+                ],
+                color: [1, 0.9, 0.1]
+            },
+            // 上面 (y = +1)  — 品红
+            {
+                pos: [
+                    [-1, 1, -1],
+                    [-1, 1, 1],
+                    [1, 1, 1],
+                    [1, 1, -1]
+                ],
+                color: [1, 0.2, 0.8]
+            },
+            // 下面 (y = -1)  — 青色
+            {
+                pos: [
+                    [-1, -1, -1],
+                    [1, -1, -1],
+                    [1, -1, 1],
+                    [-1, -1, 1]
+                ],
+                color: [0.1, 0.9, 0.9]
+            }
+        ];
+
+        // 用于存储所有顶点的数组 (每个顶点 6 个值: x,y,z, r,g,b)
+        const vertexData = [];
+        for (const face of faces) {
+            const [v0, v1, v2, v3] = face.pos; // 4 个顶点
+            const [r, g, b] = face.color;      // 该面的颜色
+            // 每个面拆成两个三角形： (v0, v1, v2) 和 (v0, v2, v3)
+            const verts = [
+                v0, v1, v2,
+                v0, v2, v3
+            ];
+            // 将每个顶点的坐标和颜色依次放入数组
+            for (const v of verts) {
+                vertexData.push(v[0], v[1], v[2], r, g, b);
+            }
+        }
+
+        // 转换为 Float32Array，便于 GPU 传输
+        const vertexArray = new Float32Array(vertexData);
+        const vertexCount = vertexArray.length / 6; // 顶点个数 (36)
+
+        // 创建缓冲区并上传数据
+        const buffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+        gl.bufferData(gl.ARRAY_BUFFER, vertexArray, gl.STATIC_DRAW);
+
+        // ================================================================
+        // 5. 矩阵运算库 (4x4 矩阵，列主序)
+        //    包含：单位矩阵、乘法、透视投影、LookAt 视图、绕三轴旋转
+        // ================================================================
+
+        /**
+         * 创建 4x4 单位矩阵 (列主序)
+         */
+        function mat4Identity() {
+            return new Float32Array([
+                1, 0, 0, 0,
+                0, 1, 0, 0,
+                0, 0, 1, 0,
+                0, 0, 0, 1
+            ]);
+        }
+
+        /**
+         * 矩阵乘法：返回 A * B (列主序)
+         * 注意：矩阵乘法不满足交换律，顺序很重要
+         */
+        function mat4Multiply(A, B) {
+            const a = A;
+            const b = B;
+            const result = new Float32Array(16);
+            // 遍历每一列 (col) 和每一行 (row)
+            for (let col = 0; col < 4; col++) {
+                for (let row = 0; row < 4; row++) {
+                    let sum = 0;
+                    for (let k = 0; k < 4; k++) {
+                        // 列主序存储：元素索引 = row + col * 4
+                        sum += a[row + k * 4] * b[k + col * 4];
+                    }
+                    result[row + col * 4] = sum;
+                }
+            }
+            return result;
+        }
+
+        /**
+         * 构建透视投影矩阵 (列主序)
+         * @param {number} fov    - 垂直视野角 (弧度)
+         * @param {number} aspect - 宽高比 (width / height)
+         * @param {number} near   - 近平面距离 (正数)
+         * @param {number} far    - 远平面距离 (正数，大于 near)
+         * @returns {Float32Array} 4x4 透视矩阵
+         */
+        function mat4Perspective(fov, aspect, near, far) {
+            const f = 1.0 / Math.tan(fov / 2);
+            const n = near;
+            const f_ = far;
+            // 标准 OpenGL 透视矩阵 (右手坐标系)
+            return new Float32Array([
+                f / aspect, 0, 0, 0,
+                0, f, 0, 0,
+                0, 0, -(f_ + n) / (f_ - n), -1,
+                0, 0, -(2 * f_ * n) / (f_ - n), 0
+            ]);
+        }
+
+        /**
+         * 构建 LookAt 视图矩阵 (列主序)
+         * @param {number[]} eye    - 相机位置 [x, y, z]
+         * @param {number[]} center - 目标点 [x, y, z]
+         * @param {number[]} up     - 世界坐标系的上方向 [x, y, z]
+         * @returns {Float32Array} 4x4 视图矩阵
+         */
+        function mat4LookAt(eye, center, up) {
+            const [ex, ey, ez] = eye;
+            const [cx, cy, cz] = center;
+            const [ux, uy, uz] = up;
+
+            // 计算前向量 (forward) = normalize(center - eye)
+            let fx = cx - ex,
+                fy = cy - ey,
+                fz = cz - ez;
+            const flen = Math.sqrt(fx * fx + fy * fy + fz * fz);
+            fx /= flen;
+            fy /= flen;
+            fz /= flen;
+
+            // 计算右向量 (right) = normalize(cross(forward, up))
+            let rx = fy * uz - fz * uy;
+            let ry = fz * ux - fx * uz;
+            let rz = fx * uy - fy * ux;
+            const rlen = Math.sqrt(rx * rx + ry * ry + rz * rz);
+            rx /= rlen;
+            ry /= rlen;
+            rz /= rlen;
+
+            // 重新计算上向量 (up') = cross(right, forward)
+            let ux_ = ry * fz - rz * fy;
+            let uy_ = rz * fx - rx * fz;
+            let uz_ = rx * fy - ry * fx;
+
+            // 构造视图矩阵 (列主序)
+            return new Float32Array([
+                rx, ux_, -fx, 0,
+                ry, uy_, -fy, 0,
+                rz, uz_, -fz, 0,
+                -(rx * ex + ry * ey + rz * ez),
+                -(ux_ * ex + uy_ * ey + uz_ * ez),
+                (fx * ex + fy * ey + fz * ez),
+                1
+            ]);
+        }
+
+        /**
+         * 绕 X 轴旋转矩阵 (列主序)
+         * @param {number} angle - 旋转角度 (弧度)
+         */
+        function mat4RotationX(angle) {
+            const c = Math.cos(angle);
+            const s = Math.sin(angle);
+            return new Float32Array([
+                1, 0, 0, 0,
+                0, c, s, 0,
+                0, -s, c, 0,
+                0, 0, 0, 1
+            ]);
+        }
+
+        /**
+         * 绕 Y 轴旋转矩阵 (列主序)
+         */
+        function mat4RotationY(angle) {
+            const c = Math.cos(angle);
+            const s = Math.sin(angle);
+            return new Float32Array([
+                c, 0, -s, 0,
+                0, 1, 0, 0,
+                s, 0, c, 0,
+                0, 0, 0, 1
+            ]);
+        }
+
+        /**
+         * 绕 Z 轴旋转矩阵 (列主序)
+         */
+        function mat4RotationZ(angle) {
+            const c = Math.cos(angle);
+            const s = Math.sin(angle);
+            return new Float32Array([
+                c, s, 0, 0,
+                -s, c, 0, 0,
+                0, 0, 1, 0,
+                0, 0, 0, 1
+            ]);
+        }
+
+        // ================================================================
+        // 6. 固定参数：视角、近远平面、上方向
+        //    这些值在渲染过程中保持不变
+        // ================================================================
+
+        const fov = Math.PI / 4;      // 45度视野角
+        const near = 0.1;             // 近裁剪面
+        const far = 100.0;            // 远裁剪面
+        const eye = [5, 5, 5];        // 相机位置
+        const center = [0, 0, 0];     // 视线目标点 (原点)
+        const up = [0, 1, 0];         // 世界空间的上方向
+
+        // 预先计算视图矩阵 (固定不变)
+        const V = mat4LookAt(eye, center, up);
+
+        // ================================================================
+        // 7. 全屏自适应函数
+        //    当窗口大小变化时，更新画布尺寸、视口和透视矩阵的宽高比
+        // ================================================================
+
+        function resize() {
+            const width = window.innerWidth;
+            const height = window.innerHeight;
+
+            // 设置画布的实际像素尺寸 (分辨率)
+            canvas.width = width;
+            canvas.height = height;
+
+            // 更新 WebGL 视口，使其覆盖整个画布
+            gl.viewport(0, 0, width, height);
+
+            // 根据新的宽高比重新计算透视矩阵
+            const aspect = width / height;
+            const P = mat4Perspective(fov, aspect, near, far);
+
+            // 将透视矩阵 P 与视图矩阵 V 相乘，得到 PV (不变部分)
+            // 这样在渲染循环中只需再乘以模型矩阵 M，提高效率
+            window.PV = mat4Multiply(P, V);
+        }
+
+        // 首次调用，设置初始尺寸
+        resize();
+
+        // 监听窗口大小变化事件，重新调整
+        window.addEventListener('resize', () => {
+            resize();
+        });
+
+        // ================================================================
+        // 8. 设置顶点属性指针，启用顶点属性
+        // ================================================================
+
+        // 使用我们编译好的程序
+        gl.useProgram(program);
+
+        // 启用位置属性，并指定数据格式
+        // 步长为 6 个 float (位置3个 + 颜色3个)，位置偏移为 0 字节
+        gl.enableVertexAttribArray(aPosition);
+        gl.vertexAttribPointer(aPosition, 3, gl.FLOAT, false, 6 * 4, 0);
+
+        // 启用颜色属性，偏移为 3 个 float (即 12 字节)
+        gl.enableVertexAttribArray(aColor);
+        gl.vertexAttribPointer(aColor, 3, gl.FLOAT, false, 6 * 4, 3 * 4);
+
+        // 开启深度测试，保证面片正确遮挡
+        gl.enable(gl.DEPTH_TEST);
+        gl.depthFunc(gl.LESS);
+
+        // 设置清除颜色 (深蓝紫色背景)
+        gl.clearColor(0.1, 0.1, 0.18, 1.0);
+
+        // ================================================================
+        // 9. 渲染循环 (动画)
+        //    每帧更新三个轴的旋转角度，组合模型矩阵，计算 MVP 并绘制
+        // ================================================================
+
+        // 三个轴的累积旋转角度 (弧度)
+        let angleX = 0;
+        let angleY = 0;
+        let angleZ = 0;
+
+        function render() {
+            // 每帧增加角度，速度不同，产生丰富的翻滚轨迹
+            angleX += 0.012;   // X 轴旋转速度
+            angleY += 0.018;   // Y 轴旋转速度
+            angleZ += 0.009;   // Z 轴旋转速度
+
+            // 构造模型矩阵：先绕 Y 轴旋转，再绕 X 轴，最后绕 Z 轴
+            // 矩阵乘法顺序：最终变换 M = Rz * Rx * Ry (因为列向量 v，M*v 先应用 Ry，再 Rx，最后 Rz)
+            const RY = mat4RotationY(angleY);
+            const RX = mat4RotationX(angleX);
+            const RZ = mat4RotationZ(angleZ);
+            let M = mat4Multiply(RX, RY); // M = Rx * Ry
+            M = mat4Multiply(RZ, M);      // M = Rz * (Rx * Ry)
+
+            // 计算 MVP = PV * M，其中 PV = P * V 已在 resize 中更新
+            const MVP = mat4Multiply(window.PV, M);
+
+            // 将 MVP 矩阵传递给着色器 uniform 变量
+            gl.uniformMatrix4fv(uMVP, false, MVP);
+
+            // 清除颜色缓冲和深度缓冲
+            gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+            // 绘制三角形 (从第 0 个顶点开始，共 vertexCount 个顶点)
+            gl.drawArrays(gl.TRIANGLES, 0, vertexCount);
+
+            // 请求下一帧动画
+            requestAnimationFrame(render);
+        }
+
+        // 启动渲染循环
+        render();
+
+        // 控制台输出提示 (便于调试)
+        console.log('✅ 正方体全屏翻滚中 (三轴)');
+    </script>
+</body>
+</html>

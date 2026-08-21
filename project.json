@@ -1,0 +1,146 @@
+{
+  "targets": [
+    {
+      "isStage": true,
+      "name": "Stage",
+      "variables": {
+        "`jEk@4|i[#Fk?(8x)AV.-my variable": [
+          "我的变量",
+          0
+        ]
+      },
+      "lists": {},
+      "broadcasts": {},
+      "blocks": {},
+      "comments": {},
+      "frames": {},
+      "currentCostume": 0,
+      "costumes": [
+        {
+          "id": "?*1-COP!DwPK.cgjoiqT",
+          "assetId": "cd21514d0531fdffb22204e0ec5ed84a",
+          "name": "背景1",
+          "dataFormat": "svg",
+          "md5ext": "cd21514d0531fdffb22204e0ec5ed84a.svg",
+          "rotationCenterX": 240,
+          "rotationCenterY": 180
+        }
+      ],
+      "sounds": [
+        {
+          "id": "e7JO+?4^!|*58GcNrabj",
+          "name": "啵",
+          "assetId": "83a9787d4cb6f3b7632b4ddfebf74367",
+          "dataFormat": "wav",
+          "format": "",
+          "rate": 48000,
+          "sampleCount": 1123,
+          "md5ext": "83a9787d4cb6f3b7632b4ddfebf74367.wav"
+        }
+      ],
+      "volume": 100,
+      "layerOrder": 0,
+      "extractProperties": {},
+      "tempo": 60,
+      "videoTransparency": 50,
+      "videoState": "on",
+      "textToSpeechLanguage": null
+    },
+    {
+      "isStage": false,
+      "name": "角色1",
+      "variables": {},
+      "lists": {},
+      "broadcasts": {},
+      "blocks": {
+        "!~;uG-T?0mGx6Y0DHNxA": {
+          "opcode": "someBlocks_getLetterByIndexFromText",
+          "next": null,
+          "parent": null,
+          "inputs": {
+            "TEXT": [
+              1,
+              [
+                10,
+                "abcdefg"
+              ]
+            ],
+            "LETTER_NUM": [
+              1,
+              [
+                4,
+                "1"
+              ]
+            ]
+          },
+          "fields": {},
+          "shadow": false,
+          "hidden": false,
+          "locked": false,
+          "topLevel": true,
+          "x": -1463,
+          "y": -650
+        }
+      },
+      "comments": {},
+      "frames": {},
+      "currentCostume": 0,
+      "costumes": [
+        {
+          "id": "EJlPj*kZ6VV5JExVMDLo",
+          "assetId": "3b9d82418377858b9d35a52c3f95f47c",
+          "name": "造型1",
+          "bitmapResolution": 1,
+          "dataFormat": "svg",
+          "md5ext": "3b9d82418377858b9d35a52c3f95f47c.svg",
+          "rotationCenterX": 61.086482371673526,
+          "rotationCenterY": 99.39553372576503
+        }
+      ],
+      "sounds": [],
+      "volume": 100,
+      "layerOrder": 1,
+      "extractProperties": {},
+      "visible": true,
+      "x": 0,
+      "y": 0,
+      "size": 100,
+      "direction": 90,
+      "draggable": false,
+      "rotationStyle": "all around"
+    }
+  ],
+  "monitors": [],
+  "gandi": {
+    "wildExtensions": {
+      "someBlocks": {
+        "id": "someBlocks",
+        "url": "https://m.ccw.site/user_projects_assets/431c97e76459b12220ffcebf1c026ffe.js"
+      }
+    },
+    "assets": [
+      {
+        "id": "?ADdRXNUAJmnL`;Y4}kQ",
+        "assetId": "431c97e76459b12220ffcebf1c026ffe",
+        "name": "extension",
+        "md5ext": "431c97e76459b12220ffcebf1c026ffe.js",
+        "dataFormat": "js"
+      }
+    ]
+  },
+  "extensions": [
+    "someBlocks"
+  ],
+  "extensionURLs": {
+    "someBlocks": "https://m.ccw.site/user_projects_assets/431c97e76459b12220ffcebf1c026ffe.js"
+  },
+  "meta": {
+    "semver": "3.0.0",
+    "vm": "0.2.0",
+    "agent": "",
+    "platform": {
+      "name": "Gandi",
+      "url": "https://getgandi.com/"
+    }
+  }
+}
