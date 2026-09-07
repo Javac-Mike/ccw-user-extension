@@ -4,24 +4,18 @@
     const {ArgumentType, BlockType, Cast, translate, extensions, runtime} = _Scratch;
     // 感谢Arkos
     const vm = ((runtime) => {
-        const hijack = (fn) => {
-            const orig = Function.apply;
-            Function.prototype.apply = (thisArg) => thisArg;
-            const result = fn();
-            Function.prototype.apply = orig;
-            return result;
-        }
-        const getScratchVM = (runtime) => {
-            function getEvent(e) {
-                return e instanceof Array? e[e.length - 1] : e;
-            }
-            const { vm } = hijack(getEvent(runtime._events.QUESTION)).props;
-            return vm;
-        }
-        return getScratchVM(runtime);
+        const orig = Function.prototype.apply;
+        Function.prototype.apply = (thisArg) => thisArg;
+        const e = runtime._events.QUESTION;
+        const result = (e instanceof Array? e[e.length - 1] : e)().props.vm;
+        Function.prototype.apply = orig;
+        return result;
     })(runtime);
 
     ArgumentType.VECTOR3 = "Vector3";
+
+    const radians = d => d * Math.PI / 180;
+    const degrees = r => r / Math.PI * 180;
 
     class Vector3 {
         constructor (x, y, z) {
@@ -73,10 +67,14 @@
                 this.x * other.y - this.y * other.x
             );
         }
+
+        toString () {
+            return `<Vector3 x=${this.x} y=${this.y} z=${this.z}>`
+        }
     }
 
     const matrix = {
-        multiply(a, b) {
+        multiply(a, b) { // 矩阵乘法
             const result = new Float32Array(16);
             for (let col = 0; col < 4; col++) {
                 for (let row = 0; row < 4; row++) {
@@ -89,7 +87,7 @@
             }
             return result;
         },
-        perspective (fov, aspect, near, far) {
+        perspectiveRadians (fov, aspect, near, far) { // 弧度制透视矩阵(感谢DeepSeek)
             const f = 1.0 / Math.tan(fov / 2);
             return new Float32Array([
                 f / aspect, 0, 0,                                0,
@@ -97,7 +95,71 @@
                 0,          0, -(far + near) / (far - near),    -1,
                 0,          0, -(2 * far * near) / (far - near), 0
             ]);
-        }
+        },
+        perspectiveDegrees (fov, aspect, near, far) {
+            return matrix.perspectiveRadians(radians(fov), aspect, near, far);
+        },
+        lookAt (e, c, u) {
+            const eye = new Vector3(...e);
+            const center = new Vector3(...c);
+            const up = new Vector3(...u);
+            const forward = center.sub(eye).normalize();  // ？！方便！？
+            const right = forward.cross(up).normalize();
+            const up_ = right.cross(forward);
+            return new Float32Array([
+                right.x, up_.x, -(forward.x), 0,
+                right.y, up_.y, -(forward.y), 0,
+                right.z, up_.z, -(forward.z), 0,
+                -(right.dot(eye)), -(up_.dot(eye)), -(forward.dot(eye)), 1  // ？！可读！？
+            ]);
+        },
+        identity () {
+            return new Float32Array([
+                1, 0, 0, 0,
+                0, 1, 0, 0,
+                0, 0, 1, 0,
+                0, 0, 0, 1
+            ]);
+        },
+        xRotationRadians (angle) {
+            const c = Math.cos(angle);
+            const s = Math.sin(angle);
+            return new Float32Array([
+                1, 0, 0, 0,
+                0, c, s, 0,
+                0, -s, c, 0,
+                0, 0, 0, 1
+            ]);
+        },
+        yRotationRadians (angle) {
+            const c = Math.cos(angle);
+            const s = Math.sin(angle);
+            return new Float32Array([
+                c, 0, -s, 0,
+                0, 1, 0, 0,
+                s, 0, c, 0,
+                0, 0, 0, 1
+            ]);
+        },
+        zRotationRadians (angle) {
+            const c = Math.cos(angle);
+            const s = Math.sin(angle);
+            return new Float32Array([
+                c, s, 0, 0,
+                -s, c, 0, 0,
+                0, 0, 1, 0,
+                0, 0, 0, 1
+            ]);
+        },
+        xRotationDegrees (angle) {
+            return matrix.xRotationRadians(radians(angle));
+        },
+        yRotationDegrees (angle) {
+            return matrix.yRotationRadians(radians(angle));
+        },
+        zRotationDegrees (angle) {
+            return matrix.zRotationRadians(radians(angle));
+        },
     }
 
     translate.setup({
@@ -271,10 +333,6 @@ void main() {\r
             list.value = obj;
         }
 
-        /**
-         * 感谢Arkos
-         * @returns {text: "列表名", value: "列表id"}[];
-         */
         listMenu() {
             const menus = [];
             let {variables} = this.runtime._stageTarget;
@@ -342,18 +400,7 @@ void main() {\r
                         }
                         this.stageCanvas = document.getElementsByClassName('ccw-stage-wrapper')[0].getElementsByTagName('div')[0].getElementsByTagName('canvas')[0];
                         this.gl = this.stageCanvas.getContext('webgl2');
-                        this.glEnabled = this.gl ? true : false;/*
-              if (this.glEnabled) {
-                this.gl.viewport(0, 0, this.stageCanvas.width, this.stageCanvas.height);
-                const observer = new MutationObserver((mutationList) => {
-                  for (const mutation of mutationList) {
-                    if (mutation.attributeName === 'width' || mutation.attributeName === 'height') {
-                      gl.viewport(0, 0, this.stageCanvas.width, this.stageCanvas.height);
-                    }
-                  }
-                });
-                observer.observe(this.stageCanvas, {attributes: true, attributeFilter: ['width', 'height']});
-              }*/
+                        this.glEnabled = this.gl ? true : false;
                     }
                 ),
                 this.makeBlock(
